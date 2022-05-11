@@ -9,7 +9,20 @@ Properties {
     $buildDir = "${rootDir}\build"
 }
 
-Task InitModule {
+Task Default -depends Build
+
+Task Build -depends InitBuild,Clean,UpdateModuleManifest,PrepareBuild {
+	ProcessScriptModule "${sourceDir}\${scriptModule}" |Out-File -FilePath "${script:outpath}\${scriptModule}" -Encoding utf8
+
+	ls (Join-Path $sourceDir "private") -Recurse -Filter "*.ps1" |% {Get-Content $_ -Encoding UTF8 |Add-Content "${script:outpath}\${scriptModule}" -Encoding UTF8}
+	ls (Join-Path $sourceDir "public") -Recurse -Filter "*.ps1" |% {Get-Content $_ -Encoding UTF8 |Add-Content "${script:outpath}\${scriptModule}" -Encoding UTF8}
+}
+
+Task InitBuild {
+	Import-Module "${rootDir}\Functions.psm1"
+}
+
+Task Scaffold {
 
     if (-not (Test-Path $sourceDir)) {
         mkdir $sourceDir
@@ -18,7 +31,7 @@ Task InitModule {
     if (-not (Test-Path $buildDir)) { mkdir $buildDir }
 
     if (-not (Test-Path "${sourceDir}\${moduleManifest}" -PathType Leaf)) {
-        New-ModuleManifest -Path "${sourceDir}\${moduleManifest}" -ModuleVersion $buildVersion
+        New-ModuleManifest -Path "${sourceDir}\${moduleManifest}" -ModuleVersion $buildVersion -RootModule $scriptModule
     }
 
     if (-not (Test-Path "${sourceDir}\${scriptModule}" -PathType Leaf)) {
@@ -28,52 +41,34 @@ Task InitModule {
 
 Task UpdateVersion {
 
-    $buildNumber = 0
-	$revNumber = -1
-
-    $git = Get-Command git -ErrorAction SilentlyContinue
-	if ($null -ne $git) {
-		$revNumber = [int]"0x$(git rev-parse --short HEAD)"
-	}
-
-	$versions = @{}
-	if (Test-Path "${sourceDir}\Versions.json") {
-		$versions = Get-Content ${sourceDir}\Versions.json -Raw |ConvertFrom-Json
-		$buildNumber = ++$versions.$version
-		$versions.$version = $buildNumber 
-	} else {
-		$versions.$version = ++$buildNumber
-	}
-	$versions |ConvertTo-Json |Set-Content ${sourceDir}\Versions.json
-
-	$v = [Version]$version
-	$v = New-Object System.Version $v.Major,$v.Minor,$buildNumber,$revNumber
-	$script:buildVersion = $v.ToString()
+	$script:buildVersion = GetBuildVersion "${sourceDir}\Versions.json"
 
     "`$buildVersion = " + $script:buildVersion
 }
 
-Task UpdateModuleManifest -depends UpdateVersion {
-
-	$functionsToExport = @()
-
-	ls (Join-Path $sourceDir "Public\*.ps1") -Recurse |ForEach-Object {
-		$tokens = $errors = $null
-		$ast = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
-
-		$functionDefinitions = $ast.FindAll({
-			param([System.Management.Automation.Language.Ast]$Ast)
-			$Ast -is [System.Management.Automation.Language.FunctionDefinitionAst] -and ($PSVersionTable.PSVersion.Major -lt 5 -or $Ast.Parent -isnot [System.Management.Automation.Language.FunctionMemberAst])
-		}, $true)
-
-		$functionsToExport += $functionDefinitions |ForEach-Object { ($_ -as [System.Management.Automation.Language.FunctionDefinitionAst]).Name }
+Task PrepareBuild {
+    $script:outpath = Join-Path $buildDir "${moduleName}/${script:buildVersion}"
+	if (-not (Test-Path $script:outpath)) {
+		New-Item $script:outpath -ItemType Directory
 	}
 
-	$scriptsToProcess = @()
-	$scriptsToProcess += (ls (Join-Path $sourceDir "Scripts\*.ps1") |% {"Scripts\$($_.Name)"})
-	$scriptsToProcess += (ls (Join-Path $sourceDir "Classes\*.ps1") |% {"Classes\$($_.Name)"})
+    Copy-Item (Join-Path $sourceDir $moduleManifest) -Destination $dir
+	Copy-Item (Join-Path $sourceDir "lib") -Recurse -Destination $dir
+	Copy-Item (Join-Path $sourceDir "scripts") -Recurse -Destination $dir
+}
 
-	Update-ModuleManifest -Path (Join-Path $sourceDir $moduleManifest) -FunctionsToExport $functionsToExport -ModuleVersion $script:buildVersion -ScriptsToProcess $scriptsToProcess
+Task UpdateModuleManifest -depends UpdateVersion {
+
+	$functionsToExport = GetExportedFunctions (ls (Join-Path $sourceDir "Public\*.ps1") -Recurse)
+	$scriptsToProcess = ,(ls (Join-Path $sourceDir "Scripts\*.ps1") |% {"Scripts\$($_.Name)"})
+
+	$param = @{
+		Path = (Join-Path $sourceDir $moduleManifest)
+		FunctionsToExport = $functionsToExport
+		ModuleVersion = $script:buildVersion
+		ScriptsToProcess = $scriptsToProcess
+	}
+	Update-ModuleManifest @param
 }
 
 Task Clean {
