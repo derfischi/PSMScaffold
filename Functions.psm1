@@ -1,6 +1,6 @@
 function GetExportedFunctions {
     param (
-        $Files
+        [array]$Files
     )
     
     $functionsToExport = @()
@@ -22,7 +22,8 @@ function GetExportedFunctions {
 
 function GetBuildVersion {
     param (
-        $FilePath
+        [string]$FilePath,
+        [string]$Version
     )
 
     $buildNumber = 0
@@ -36,14 +37,14 @@ function GetBuildVersion {
 	$versions = @{}
 	if (Test-Path $FilePath) {
 		$versions = Get-Content $FilePath -Raw |ConvertFrom-Json
-		$buildNumber = ++$versions.$version
-		$versions.$version = $buildNumber 
+		$buildNumber = ++$versions.$Version
+		$versions.$Version = $buildNumber 
 	} else {
-		$versions.$version = ++$buildNumber
+		$versions.$Version = ++$buildNumber
 	}
 	$versions |ConvertTo-Json |Set-Content $FilePath
 
-	$v = [Version]$version
+	$v = [Version]$Version
 	$v = New-Object System.Version $v.Major,$v.Minor,$buildNumber,$revNumber
 	
     return $v.ToString()
@@ -87,7 +88,7 @@ function ProcessScriptModule {
     $lines |ForEach-Object {
         if ($_ -match "^#include\<(.*)\>$") {
             $includePath = Join-Path $dir $Matches[1]
-            $sb.Append((ProcessInclude $includePath))
+            [void]$sb.Append((ProcessInclude $includePath))
         } else {
             Write-Debug "Append: ${_}"
             [void]$sb.AppendLine($_)
